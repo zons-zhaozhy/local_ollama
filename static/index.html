@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>大模型智能助手</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 10px;
+            background-color: #f4f4f4;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+        }
+        h1 {
+            text-align: center;
+            color: #333;
+            margin-bottom: 10px;
+        }
+        .container {
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            padding: 10px;
+            margin: auto;
+            max-width: 600px;
+            width: 100%;
+            box-sizing: border-box;
+            flex-grow: 1;
+            display: flex;
+            flex-direction: column;
+        }
+        label {
+            margin-top: 5px;
+            font-weight: bold;
+        }
+        input[type="text"], textarea, select, input[type="file"] {
+            width: 100%;
+            padding: 6px;
+            margin-top: 5px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            box-sizing: border-box;
+        }
+        textarea {
+            height: 60px;
+        }
+        button {
+            margin-top: 10px;
+            padding: 8px;
+            background-color: #007BFF;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        #result-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            margin-top: 10px;
+        }
+        #result {
+            border: 1px solid #ccc;
+            padding: 10px;
+            flex-grow: 1;
+            min-height: 80px;
+            overflow-y: auto;
+            background-color: #f9f9f9;
+            border-radius: 4px;
+            white-space: pre-wrap;
+            width: 100%;
+        }
+        #voiceInputButton {
+            padding: 8px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        #voiceInputButton.recording {
+            background-color: #f44336;
+        }
+        .loader {
+            border: 8px solid #f3f3f3;
+            border-radius: 50%;
+            border-top: 8px solid #3498db;
+            width: 40px;
+            height: 40px;
+            animation: spin 2s linear infinite;
+            display: none;
+            margin-top: 10px;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <h1>大模型智能助手</h1>
+    
+    <div class="container">
+        <label for="baseUrl">设置大模型 Base URL:</label>
+        <input type="text" id="baseUrl" placeholder="请输入大模型的 Base URL" value="http://10.22.11.110:11444/">
+        
+        <label for="model">选择模型:</label>
+        <select id="model">
+            <!-- 选项将通过 JavaScript 动态填充 -->
+        </select>
+        
+        <label for="question">输入问题:</label>
+        <div style="display: flex; align-items: center;">
+            <textarea id="question" placeholder="请输入您的问题" style="flex-grow: 1; margin-right: 5px;"></textarea>
+            <button id="voiceInputButton">按住说话</button>
+        </div>
+        
+        <label for="fileInput">选择文件:</label>
+        <input type="file" id="fileInput">
+        
+        <button id="askButton">提问</button>
+        
+        <div id="result-container">
+            <h2>结果:</h2>
+            <div class="loader" id="loader"></div>
+            <div id="result"></div>
+        </div>
+    </div>
+
+    <script>
+        window.addEventListener('load', requestMicrophonePermission);
+
+        async function requestMicrophonePermission() {
+            try {
+                await navigator.mediaDevices.getUserMedia({ audio: true });
+                console.log('麦克风权限已授予');
+            } catch (err) {
+                console.error('麦克风权限请求失败:', err);
+                showMicrophoneInstructions();
+            }
+        }
+
+        async function loadModels() {
+            const baseUrl = document.getElementById('baseUrl').value.trim();
+            try {
+                const response = await fetch(`/api/tags?base_url=${encodeURIComponent(baseUrl)}`);
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                const data = await response.json();
+                const models = data.models;
+                const modelSelect = document.getElementById('model');
+                modelSelect.innerHTML = ''; // 清空现有选项
+                models.forEach(model => {
+                    const option = document.createElement('option');
+                    option.value = model;
+                    option.textContent = model;
+                    modelSelect.appendChild(option);
+                });
+            } catch (error) {
+                console.error('加载模型失败:', error);
+            }
+        }
+
+        window.onload = loadModels;
+        document.getElementById('baseUrl').addEventListener('change', loadModels);
+
+        document.getElementById('askButton').addEventListener('click', async () => {
+            const baseUrl = document.getElementById('baseUrl').value.trim();
+            const model = document.getElementById('model').value;
+            const question = document.getElementById('question').value;
+            const resultDiv = document.getElementById('result');
+            const loader = document.getElementById('loader');
+
+            resultDiv.innerHTML = ''; // 清空之前的内容，不显示"正在请求..."
+            loader.style.display = 'block'; // 显示加载动画
+
+            const fileInput = document.getElementById('fileInput');
+            let fileContent = '';
+
+            if (fileInput.files.length > 0) {
+                const file = fileInput.files[0];
+                const reader = new FileReader();
+                reader.onload = async function(event) {
+                    fileContent = event.target.result;
+                    sendRequest(baseUrl, model, question, fileContent, resultDiv, loader);
+                };
+                reader.readAsText(file);
+            } else {
+                sendRequest(baseUrl, model, question, fileContent, resultDiv, loader);
+            }
+        });
+
+        async function sendRequest(baseUrl, model, question, fileContent, resultDiv, loader) {
+            const requestData = {
+                baseUrl: baseUrl,
+                model: model,
+                prompt: question,
+                fileContent: fileContent
+            };
+
+            try {
+                const response = await fetch('http://' + window.location.host + '/generate', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(requestData)
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.detail || `HTTP error! status: ${response.status}`);
+                }
+
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder('utf-8');
+                let buffer = '';
+                const p = document.createElement('p');
+                resultDiv.appendChild(p);
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    buffer += decoder.decode(value, { stream: true });
+                    const lines = buffer.split('\n');
+                    buffer = lines.pop(); // 保留最后一个不完整的行
+
+                    for (const line of lines) {
+                        if (line.trim()) {
+                            try {
+                                const jsonChunk = JSON.parse(line);
+                                if (jsonChunk.response) {
+                                    p.textContent += jsonChunk.response;  // 追加显示 response 字段的内容
+                                }
+                            } catch (e) {
+                                console.error('解析 JSON 失败:', e);
+                            }
+                        }
+                    }
+                }
+
+                // 处理剩余的缓冲区
+                if (buffer.trim()) {
+                    try {
+                        const jsonChunk = JSON.parse(buffer);
+                        if (jsonChunk.response) {
+                            p.textContent += jsonChunk.response;  // 追加显示 response 字段的内容
+                        }
+                    } catch (e) {
+                        console.error('解析 JSON 失败:', e);
+                    }
+                }
+            } catch (error) {
+                console.error('请求失败:', error);
+                resultDiv.innerHTML = `请求失败: ${error.message}`;
+            } finally {
+                loader.style.display = 'none'; // 隐藏加载动画
+            }
+        }
+
+        document.getElementById('voiceInputButton').addEventListener('mousedown', startRecording);
+        document.getElementById('voiceInputButton').addEventListener('mouseup', stopRecording);
+
+        let mediaRecorder;
+        let audioChunks = [];
+
+        async function startRecording() {
+            audioChunks = [];
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            mediaRecorder = new MediaRecorder(stream);
+            mediaRecorder.start();
+            document.getElementById('voiceInputButton').textContent = '录音中...';
+            document.getElementById('voiceInputButton').classList.add('recording');
+
+            mediaRecorder.addEventListener('dataavailable', event => {
+                audioChunks.push(event.data);
+            });
+
+            mediaRecorder.addEventListener('stop', () => {
+                const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+                sendAudioToServer(audioBlob);
+            });
+        }
+
+        async function stopRecording() {
+            mediaRecorder.stop();
+            document.getElementById('voiceInputButton').textContent = '按住说话';
+            document.getElementById('voiceInputButton').classList.remove('recording');
+        }
+
+        async function sendAudioToServer(audioBlob) {
+            const formData = new FormData();
+            formData.append('audio', audioBlob, 'recording.webm');
+            const baseUrl = document.getElementById('baseUrl').value.trim();
+            const model = document.getElementById('model').value;
+
+            try {
+                const response = await fetch(`http://${window.location.host}/api/speech_to_text`, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.detail || `HTTP error! status: ${response.status}`);
+                }
+
+                const result = await response.json();
+                console.log('语音识别结果:', result);
+                if (result.text) {
+                    document.getElementById('question').value = result.text;  // 将识别到的文本填充到输入框
+                } else {
+                    throw new Error('未收到识别结果');
+                }
+            } catch (error) {
+                console.error('语音识别失败:', error);
+                alert('语音识别失败: ' + error.message);
+            }
+        }
+    </script>
+</body>
+</html>
